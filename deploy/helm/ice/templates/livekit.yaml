@@ -1,0 +1,80 @@
+{{- /*
+Optional self-hosted LiveKit SFU for voice rooms. Disabled by default; the app
+degrades gracefully without voice. In devMode it uses the well-known devkey/
+secret matched by the chart Secret defaults. For production, set real creds in
+`secret.livekit.*` and devMode=false (supply a real LiveKit keys config too).
+*/ -}}
+{{- if .Values.livekit.enabled -}}
+{{- $fullname := include "ice.fullname" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-livekit
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+spec:
+  replicas: {{ .Values.livekit.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ice.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: livekit
+  template:
+    metadata:
+      labels:
+        {{- include "ice.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: livekit
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: livekit
+          image: "{{ .Values.livekit.image.repository }}:{{ .Values.livekit.image.tag }}"
+          imagePullPolicy: {{ .Values.livekit.image.pullPolicy }}
+          {{- if .Values.livekit.devMode }}
+          args: ["--dev", "--bind", "0.0.0.0"]
+          {{- else }}
+          args: ["--bind", "0.0.0.0", "--config", "/etc/livekit/livekit.yaml"]
+          {{- end }}
+          ports:
+            - name: signal
+              containerPort: 7880
+            - name: rtc-tcp
+              containerPort: 7881
+          resources:
+            {{- toYaml .Values.livekit.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-livekit
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+spec:
+  type: {{ .Values.livekit.service.type }}
+  selector:
+    {{- include "ice.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: livekit
+  ports:
+    - name: signal
+      port: {{ .Values.livekit.service.httpPort }}
+      targetPort: signal
+    - name: rtc-tcp
+      port: {{ .Values.livekit.service.tcpPort }}
+      targetPort: rtc-tcp
+{{- end -}}

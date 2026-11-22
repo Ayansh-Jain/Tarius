@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true
+  },
+  "include": ["src"],
+  // Headless smoke (run by Node's type stripper, not the app build) plus its
+  // loader shims: they use node: builtins and .ts import specifiers that
+  // Vite/tsc don't compile, so we keep them out of the app's type graph.
+  "exclude": ["src/**/*.smoke.ts", "src/lib/ts-resolve-hook.mjs", "src/lib/smoke-bootstrap.mjs", "src/lib/run-smoke.mjs"]
+}

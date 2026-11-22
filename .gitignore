@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+out/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+
+# Data (self-hosted runtime state)
+data/
+*.sqlite
+*.sqlite-*
+repos/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
+
+# Agent worktrees (created during fan-out builds)
+.worktrees/
+.gstack/
+
+# Local agent/editor config
+.claude/
+
+# Python bytecode
+__pycache__/
+*.pyc

@@ -1,0 +1,30 @@
+ICE is installed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Components:
+  web     {{ .Values.web.replicas }} replica(s)   Service {{ include "ice.fullname" . }}-web:{{ .Values.web.service.port }}
+  server  {{ .Values.server.replicas }} replica(s)   Service {{ include "ice.serverServiceName" . }}:{{ .Values.server.service.port }} (git on :{{ .Values.server.service.gitPort }})
+  redis   {{ if .Values.redis.enabled }}enabled{{ else }}disabled{{ end }}
+  livekit {{ if .Values.livekit.enabled }}enabled{{ else }}disabled (voice off){{ end }}
+
+{{- if and (gt (int .Values.server.replicas) 1) (not .Values.redis.enabled) }}
+
+WARNING: server.replicas is {{ .Values.server.replicas }} but redis.enabled is false.
+Without Redis, replicas cannot share realtime state and collaborators on
+different replicas will diverge. Set redis.enabled=true. See docs/SCALING.md.
+{{- end }}
+
+Reach the app:
+{{- if .Values.ingress.enabled }}
+  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/
+{{- else }}
+  No Ingress enabled. Port-forward the web Service to try it locally:
+
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "ice.fullname" . }}-web {{ .Values.web.service.port }}:{{ .Values.web.service.port }}
+    open http://localhost:{{ .Values.web.service.port }}
+{{- end }}
+
+{{- if and .Values.secret.create (not .Values.secret.existingSecret) }}
+
+Session secret: the chart created Secret "{{ include "ice.secretName" . }}".
+Rotate it any time with `helm upgrade --set secret.sessionSecret=$(openssl rand -hex 32)`.
+{{- end }}

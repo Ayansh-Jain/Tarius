@@ -1,0 +1,39 @@
+{
+  "name": "@ice/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/index.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hocuspocus/extension-redis": "^4.1.0",
+    "@hocuspocus/extension-sqlite": "^4.1.0",
+    "@hocuspocus/server": "^4.1.0",
+    "@hono/node-server": "^2.0.4",
+    "@ice/shared": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@zed-industries/agent-client-protocol": "^0.4.5",
+    "hono": "^4.12.23",
+    "ioredis": "^5.11.0",
+    "isomorphic-git": "^1.38.3",
+    "jose": "^6.2.3",
+    "livekit-server-sdk": "^2.15.4",
+    "node-git-server": "^1.0.0",
+    "node-pty": "^1.1.0",
+    "openid-client": "^6.8.4",
+    "pg": "^8.21.0",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.7"
+  }
+}

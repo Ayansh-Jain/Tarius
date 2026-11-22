@@ -1,0 +1,54 @@
+# Build context hygiene for `docker build` / `docker compose build`.
+# Both images use the repo root as their context, so keep it lean and never
+# ship host-installed node_modules (they would shadow the in-image pnpm install)
+# or any local secrets / runtime state.
+
+# Dependencies — always reinstalled inside the image from the frozen lockfile.
+**/node_modules
+.pnpm-store
+.pnpm
+
+# Build outputs — regenerated in the build stage.
+**/dist
+**/build
+**/out
+**/.next
+**/.turbo
+**/*.tsbuildinfo
+
+# Git + agent worktrees (worktrees are huge and self-referential).
+.git
+.gitignore
+.worktrees
+
+# Self-hosted runtime state — must come from the named volume, not the context.
+**/data
+**/*.sqlite
+**/*.sqlite-*
+**/repos
+
+# Secrets / local env — never bake into an image layer.
+.env
+.env.*
+!.env.example
+**/session.secret
+
+# Docker + CI assets that don't belong inside the image.
+docker-compose.yml
+docker-compose.*.yml
+**/Dockerfile
+.dockerignore
+.github
+
+# Editor / OS noise.
+.DS_Store
+.idea
+.vscode
+*.swp
+*.log
+npm-debug.log*
+
+# Docs & planning material — not needed to build or run the apps.
+docs
+plans
+*.md

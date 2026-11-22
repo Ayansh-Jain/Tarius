@@ -1,0 +1,40 @@
+{{- /*
+Optional Ingress exposing the web edge externally. Enable + set ingress.host.
+The annotations default to ingress-nginx and raise proxy timeouts so long-lived
+Yjs WebSocket (/sync) connections aren't cut at the default 60s. For multi-
+replica server, also enable sticky sessions — see docs/SCALING.md.
+*/ -}}
+{{- if .Values.ingress.enabled -}}
+{{- $fullname := include "ice.fullname" . -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-web
+                port:
+                  number: {{ .Values.web.service.port }}
+{{- end -}}

@@ -1,0 +1,24 @@
+apiVersion: v2
+name: ice
+description: ICE — open-source, self-hostable collaborative IDE where humans and AI agents edit one shared repo live (Yjs CRDT sync, bundled git server, voice via LiveKit).
+type: application
+# Chart version — bump on chart changes.
+version: 2.0.0
+# The ICE release this chart tracks (image tags default to this).
+appVersion: "2.0"
+home: https://github.com/ice-editor/ice
+sources:
+  - https://github.com/ice-editor/ice
+keywords:
+  - collaborative-editor
+  - ide
+  - yjs
+  - crdt
+  - ai-agents
+  - livekit
+maintainers:
+  - name: ICE maintainers
+annotations:
+  # Helm is the OPTIONAL Kubernetes path; docker compose remains the default,
+  # zero-config way to self-host ICE (see the repo root docker-compose.yml).
+  category: Development

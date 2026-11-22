@@ -1,0 +1,22 @@
+{
+  "name": "ice",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ICE — Integrated Collaborative Environment: the open-source collaborative IDE for humans and AI agents.",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,163 @@
+{{- /*
+ICE web edge: nginx serving the built SPA and reverse-proxying /api + /sync to
+the server Service.
+
+The image bakes an nginx config whose upstream is the docker-compose service
+name `server`. On Kubernetes the server Service is `<release>-server`, so we
+mount a ConfigMap-rendered nginx config (identical proxy/WebSocket semantics)
+that targets the in-cluster Service DNS name and overlay it over the baked one.
+This keeps the published @ice/web image unmodified.
+*/ -}}
+{{- $fullname := include "ice.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-web-nginx
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+data:
+  ice.conf: |
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      close;
+    }
+
+    server {
+      listen       3000;
+      listen       [::]:3000;
+      server_name  _;
+
+      root  /usr/share/nginx/html;
+      index index.html;
+
+      # In-cluster CoreDNS; re-resolve so Service IP changes are picked up.
+      resolver kube-dns.kube-system.svc.cluster.local valid=10s ipv6=off;
+      # ICE server Service (host:port). Variable => lazy resolution.
+      set $ice_server "{{ include "ice.serverServiceName" . }}:{{ .Values.server.service.port }}";
+
+      proxy_read_timeout  3600s;
+      proxy_send_timeout  3600s;
+
+      location /sync {
+        proxy_pass         http://$ice_server$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        $connection_upgrade;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_buffering    off;
+      }
+
+      location /api/ {
+        proxy_pass         http://$ice_server$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+      }
+
+      location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+      }
+
+      location / {
+        try_files $uri $uri/ /index.html;
+      }
+
+      location = /healthz {
+        access_log off;
+        default_type application/json;
+        return 200 '{"status":"ok"}';
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "ice.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        {{- include "ice.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: web
+      annotations:
+        # Roll web pods when the proxy config changes.
+        checksum/nginx-config: {{ .Values.server.service.port | toString | printf "%s-%s" (include "ice.serverServiceName" .) | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: web
+          image: "{{ .Values.web.image.repository }}:{{ include "ice.imageTag" (dict "tag" .Values.web.image.tag "root" $) }}"
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d/ice.conf
+              subPath: ice.conf
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: {{ $fullname }}-web-nginx
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-web
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    {{- include "ice.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http

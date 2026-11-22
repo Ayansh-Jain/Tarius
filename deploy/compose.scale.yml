@@ -1,0 +1,64 @@
+# ICE — horizontal scale-out override (Redis fan-out for multi-replica sync).
+#
+#   docker compose -f docker-compose.yml -f deploy/compose.scale.yml up --build
+#
+# WHAT THIS DOES
+#   Adds a `redis` service and points the server at it via REDIS_URL. With Redis
+#   present, the realtime layer (Hocuspocus) fans Yjs updates out across EVERY
+#   server process subscribed to the same room, so you can run more than one
+#   `server` replica and a client connected to replica A still sees edits that
+#   landed on replica B. Without Redis, a second replica would be an island and
+#   collaborators on different replicas would silently diverge — so Redis is the
+#   prerequisite for scaling `server` past a single instance.
+#
+# HOW TO ACTUALLY SCALE OUT (after bringing this up):
+#   docker compose -f docker-compose.yml -f deploy/compose.scale.yml \
+#     up --build --scale server=3 -d
+#   The bundled `web` (nginx) load-balances across the replicas via Docker's
+#   embedded DNS (it already resolves `server` lazily at request time), so no
+#   nginx change is needed. See docs/SCALING.md for sticky-vs-stateless notes.
+#
+# This file ONLY layers config onto the base compose project; it re-declares the
+# `server` service so Compose deep-merges the new env/volume/dependency in. It
+# changes nothing about the default single-node `docker compose up` experience.
+
+name: ice
+
+services:
+  # Shared pub/sub + presence bus for cross-replica realtime fan-out.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF on so room awareness / pub-sub state survives a redis restart cleanly.
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000"]
+    volumes:
+      - ice-redis:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - ice
+
+  server:
+    # Deep-merged onto the base `server` service. We add the Redis URL and make
+    # the server wait for Redis to be healthy before it starts accepting sync.
+    environment:
+      # Consumed by the realtime layer to attach the Hocuspocus Redis extension.
+      # (If the running server build does not yet read REDIS_URL, this is inert —
+      # the variable is simply ignored, so this override is always safe to apply.)
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      # Preserve the base file's dependency wiring is not needed here: Compose
+      # merges depends_on maps, so the original deps (if any) are retained.
+
+volumes:
+  # Durable Redis state (AOF). Separate from ice-data so scaling stays isolated.
+  ice-redis:
+    driver: local

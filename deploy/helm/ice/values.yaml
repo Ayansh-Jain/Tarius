@@ -1,0 +1,173 @@
+# Default values for the ICE Helm chart.
+#
+# Helm is the OPTIONAL Kubernetes path for ICE; `docker compose up` stays the
+# default, zero-config way to self-host. These defaults bring up a working
+# single-replica install on any cluster with a default StorageClass. Turn on
+# `redis.enabled` + raise `server.replicas` for horizontal scale-out, and set
+# `ingress.enabled` + a host for external access with TLS.
+
+# -- Override the chart name used in resource names (defaults to .Chart.Name).
+nameOverride: ""
+# -- Fully override the release-qualified name used in resource names.
+fullnameOverride: ""
+
+# Image pull secrets applied to every Deployment's pod spec (private registries).
+imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# web — nginx edge: serves the built SPA and reverse-proxies /api + /sync to
+# the server Service. This is the only component normally exposed externally.
+# ---------------------------------------------------------------------------
+web:
+  image:
+    repository: ice/web
+    # Defaults to .Chart.AppVersion when left empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 3000
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+  # The web edge resolves the server by Service DNS name. Leave empty to use the
+  # chart's own server Service; set to point at an external server endpoint.
+  serverServiceName: ""
+
+# ---------------------------------------------------------------------------
+# server — Node: Hocuspocus realtime + Hono REST + bundled git server. Holds
+# durable state (SQLite + generated session secret + bare repos) on a PVC.
+# ---------------------------------------------------------------------------
+server:
+  image:
+    repository: ice/server
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Scale past 1 ONLY with redis.enabled=true (cross-replica Yjs fan-out) and
+  # sticky sessions on the ingress (see docs/SCALING.md). 1 is always safe.
+  replicas: 1
+  service:
+    type: ClusterIP
+    # REST + WebSocket /sync share this port.
+    port: 8080
+    # Bundled smart-HTTP git server (ICE_GIT_PORT = PORT+1). Exposed on the
+    # Service so in-cluster CI / clones can reach git/<roomId>.git.
+    gitPort: 8081
+  # Durable state volume mounted at /app/data (SQLite, secret, repos).
+  persistence:
+    enabled: true
+    size: 10Gi
+    # Empty = cluster default StorageClass. Set e.g. "gp3" / "standard" to pin one.
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  env:
+    # Public origin advertised in invite URLs — set to your ingress host/URL.
+    publicUrl: "http://localhost:3000"
+    # Extra raw env vars (list of {name,value} or {name,valueFrom}) merged in.
+    extra: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# livekit — self-hosted SFU for voice rooms. Off by default; the app degrades
+# gracefully without voice. `--dev` uses well-known devkey/secret (matched by
+# the secret defaults below). Set real keys + run without --dev for production.
+# ---------------------------------------------------------------------------
+livekit:
+  enabled: false
+  image:
+    repository: livekit/livekit-server
+    tag: latest
+    pullPolicy: IfNotPresent
+  replicas: 1
+  devMode: true
+  service:
+    type: ClusterIP
+    httpPort: 7880
+    tcpPort: 7881
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# redis — OPTIONAL pub/sub + presence bus for horizontal scale-out. Required
+# before running server.replicas > 1 so Yjs updates fan out across replicas.
+# This is a minimal in-chart Deployment (no external subchart dependency).
+# ---------------------------------------------------------------------------
+redis:
+  enabled: false
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  service:
+    port: 6379
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessMode: ReadWriteOnce
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# ingress — external access to the web edge. Enable + set a host. WebSocket /sync
+# needs long read timeouts and (for multi-replica server) sticky sessions; the
+# default annotations below assume the ingress-nginx controller.
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: nginx
+  host: ice.example.com
+  annotations:
+    # Long-lived Yjs WebSocket connections — don't let the proxy cut them at 60s.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  tls:
+    enabled: false
+    # Secret holding the TLS cert/key (e.g. created by cert-manager).
+    secretName: ice-tls
+
+# ---------------------------------------------------------------------------
+# secret — ICE_SESSION_SECRET (cookie/JWT HMAC) + LiveKit credentials. By
+# default the chart creates a Secret. To avoid persisting plaintext in values,
+# set `create: false` and reference an existing Secret via `existingSecret`.
+# ---------------------------------------------------------------------------
+secret:
+  create: true
+  # When set, the chart uses this Secret instead of creating one. It MUST expose
+  # the keys: ICE_SESSION_SECRET, LIVEKIT_API_KEY, LIVEKIT_API_SECRET.
+  existingSecret: ""
+  # CHANGE THIS for any real deployment. Empty is rejected by templates so an
+  # operator cannot accidentally ship the placeholder. Generate one with:
+  #   openssl rand -hex 32
+  sessionSecret: "change-me-in-production"
+  livekit:
+    # Browser-facing signaling URL advertised in voice tokens.
+    url: "ws://localhost:7880"
+    apiKey: "devkey"
+    apiSecret: "secret"
+
+# Pod scheduling knobs applied to all Deployments.
+nodeSelector: {}
+tolerations: []
+affinity: {}

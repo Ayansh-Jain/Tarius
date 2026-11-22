@@ -1,0 +1,111 @@
+# ICE — one-command self-host.
+#
+#   docker compose up --build         # build images + run
+#   open http://localhost:3000        # create a room, invite friends/agents
+#
+# ZERO required configuration: if you do not set ICE_SESSION_SECRET, the server
+# container generates a strong one on first boot and persists it inside the
+# `ice-data` volume (so it stays stable across restarts). To pin your own secret,
+# either export ICE_SESSION_SECRET in your shell or drop a `.env` next to this file
+# (see .env.example) — anything you set there overrides the auto-generated value.
+#
+# Topology:
+#   web  (nginx)  :3000  ──► serves the built SPA, reverse-proxies /api + /sync
+#                                       │
+#                                       ▼
+#   server (node) :8080  ◄── Hocuspocus realtime + Hono REST + SQLite (named volume)
+#
+# Only the `web` port is published to the host; `server` is reachable only on the
+# internal compose network, exactly as a single-origin deployment should be.
+
+name: ice
+
+services:
+  server:
+    build:
+      # Context is the repo root so the Dockerfile can see the lockfile + packages/shared.
+      context: .
+      dockerfile: apps/server/Dockerfile
+    image: ice/server:0.1
+    restart: unless-stopped
+    # `env_file` is optional — compose silently ignores a missing .env here. Use it to
+    # supply ICE_SESSION_SECRET / ANTHROPIC_API_KEY etc. without editing this file.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # These have safe in-image defaults; listed for visibility + easy override.
+      PORT: "8080"
+      ICE_DATA_DIR: /app/data
+      DATABASE_URL: file:/app/data/ice.sqlite
+      ICE_GIT_ROOT: /app/data/repos
+      # Voice (LiveKit). The token's `url` is browser-facing, so use the host-published
+      # LiveKit port. Defaults match `livekit-server --dev`; for production set a real
+      # key/secret + wss:// URL and run LiveKit without --dev.
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      # ICE_SESSION_SECRET intentionally unset -> generated + persisted on first boot.
+    volumes:
+      # Persist SQLite, the generated session secret, and git repos across restarts.
+      - ice-data:/app/data
+    expose:
+      - "8080"
+    healthcheck:
+      # Uses Node (always present) instead of curl/wget to avoid extra packages.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ice
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: ice/web:0.1
+    restart: unless-stopped
+    depends_on:
+      server:
+        # Wait until the API is actually answering before the edge starts proxying.
+        condition: service_healthy
+    ports:
+      # Host:Container — open http://localhost:3000
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ice
+
+  livekit:
+    # Self-hosted LiveKit SFU for voice rooms. `--dev` uses the well-known
+    # devkey/secret (matched by the server's LIVEKIT_* defaults above). For
+    # production, run without --dev with a real keys file + matching server creds.
+    image: livekit/livekit-server:latest
+    command: ["--dev", "--bind", "0.0.0.0"]
+    restart: unless-stopped
+    ports:
+      - "7880:7880" # signaling (ws) + HTTP
+      - "7881:7881" # TCP fallback for WebRTC
+      - "7882:7882/udp" # primary WebRTC media (UDP)
+    networks:
+      - ice
+
+volumes:
+  # Named volume holding all self-hosted runtime state (SQLite db + secret + repos).
+  ice-data:
+    driver: local
+
+networks:
+  ice:
+    driver: bridge

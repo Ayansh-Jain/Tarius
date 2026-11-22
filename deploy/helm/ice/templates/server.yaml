@@ -1,0 +1,162 @@
+{{- /*
+ICE server: Hocuspocus realtime + Hono REST + bundled smart-HTTP git server.
+Stateful (SQLite + generated session secret + bare repos under /app/data), so it
+gets a PVC. Scale server.replicas > 1 ONLY with redis.enabled (see SCALING.md).
+*/ -}}
+{{- $fullname := include "ice.fullname" . -}}
+{{- $svcName := printf "%s-server" $fullname -}}
+{{- if .Values.server.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-server-data
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  accessModes:
+    - {{ .Values.server.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size }}
+  {{- if .Values.server.persistence.storageClass }}
+  storageClassName: {{ .Values.server.persistence.storageClass }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $svcName }}
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  # Multi-replica requires redis.enabled (cross-replica Yjs fan-out). With a
+  # single RWO PVC, replicas must run on the same node OR use a RWX volume.
+  replicas: {{ .Values.server.replicas }}
+  # Recreate so a new pod doesn't fight the old one for a ReadWriteOnce PVC.
+  strategy:
+    type: {{ if gt (int .Values.server.replicas) 1 }}RollingUpdate{{ else }}Recreate{{ end }}
+  selector:
+    matchLabels:
+      {{- include "ice.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "ice.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: "{{ .Values.server.image.repository }}:{{ include "ice.imageTag" (dict "tag" .Values.server.image.tag "root" $) }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: git
+              containerPort: 8081
+          env:
+            - name: PORT
+              value: "8080"
+            - name: ICE_GIT_PORT
+              value: "8081"
+            - name: NODE_ENV
+              value: "production"
+            - name: ICE_DATA_DIR
+              value: /app/data
+            - name: DATABASE_URL
+              value: file:/app/data/ice.sqlite
+            - name: ICE_GIT_ROOT
+              value: /app/data/repos
+            - name: PUBLIC_URL
+              value: {{ .Values.server.env.publicUrl | quote }}
+            - name: ICE_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ice.secretName" . }}
+                  key: ICE_SESSION_SECRET
+            - name: LIVEKIT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ice.secretName" . }}
+                  key: LIVEKIT_URL
+            - name: LIVEKIT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ice.secretName" . }}
+                  key: LIVEKIT_API_KEY
+            - name: LIVEKIT_API_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ice.secretName" . }}
+                  key: LIVEKIT_API_SECRET
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_URL
+              value: "redis://{{ $fullname }}-redis:{{ .Values.redis.service.port }}"
+            {{- end }}
+            {{- with .Values.server.env.extra }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+      volumes:
+        - name: data
+          {{- if .Values.server.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ $fullname }}-server-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $svcName }}
+  labels:
+    {{- include "ice.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  type: {{ .Values.server.service.type }}
+  selector:
+    {{- include "ice.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: {{ .Values.server.service.port }}
+      targetPort: http
+    - name: git
+      port: {{ .Values.server.service.gitPort }}
+      targetPort: git

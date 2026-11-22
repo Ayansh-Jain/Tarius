@@ -1,0 +1,83 @@
+# ICE — OPTIONAL Forgejo integration (a full self-hosted forge alongside ICE).
+#
+#   docker compose -f docker-compose.yml -f deploy/forgejo/compose.forgejo.yml up -d
+#   open http://localhost:3001            # complete the one-time Forgejo install
+#
+# WHY
+#   ICE already ships a bundled smart-HTTP git server: every room is a real bare
+#   repo you can `git clone http://<host>:8081/git/<roomId>.git`. That is enough
+#   to push, pull, branch and run CI against a room. It is NOT a forge — no web
+#   UI for PRs, issues, code review, releases, mirrors or org/team management.
+#
+#   Forgejo (the community fork of Gitea) IS that forge. This override runs it
+#   next to ICE so you get the best of both: ICE stays the live collaborative
+#   editing surface, and Forgejo becomes the durable home for review + history.
+#   We do NOT rebuild a forge inside ICE — we integrate the proven one.
+#
+# HOW THE TWO GIT SERVERS COEXIST (no collision)
+#   • ICE git server      — port 8081 (ICE_GIT_PORT, internal), path /git/<room>.git
+#   • Forgejo HTTP        — port 3001 (published here), its own data volume
+#   • Forgejo SSH         — port 2222 (published here), never the host's 22
+#   They are independent services on the same compose network with separate
+#   ports and volumes; neither knows about the other until you wire a remote.
+#
+# PUSHING A ROOM REPO INTO FORGEJO (one-time, per room)
+#   1. In Forgejo's UI create an empty repo, e.g. `acme/room-<roomId>`.
+#   2. From a clone of the ICE room repo, add Forgejo as a second remote and push:
+#        git clone http://<host>:8081/git/<roomId>.git room && cd room
+#        git remote add forge http://<host>:3001/acme/room-<roomId>.git
+#        git push forge --all && git push forge --tags
+#   3. (Optional) keep them in sync automatically with a Forgejo *pull mirror*
+#      that tracks the ICE git URL, or push to both remotes from your convergence
+#      job. See docs/INTEGRATIONS.md for the mirror walkthrough + CI hooks.
+#
+# This override adds ONLY the `forgejo` service + its volume. It touches nothing
+# about ICE's own services, so `docker compose up` without it is unchanged.
+
+name: ice
+
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:9
+    restart: unless-stopped
+    environment:
+      # Run as a stable uid/gid so the bind-free named volume keeps consistent
+      # ownership across recreations. 1000:1000 is Forgejo's documented default.
+      USER_UID: "1000"
+      USER_GID: "1000"
+      # Tell Forgejo which public ports it lives behind so generated clone URLs
+      # and the SSH host:port it advertises are correct out of the box. Override
+      # FORGEJO_ROOT_URL via a .env if you front it with a domain + TLS.
+      FORGEJO__server__DOMAIN: "${FORGEJO_DOMAIN:-localhost}"
+      FORGEJO__server__ROOT_URL: "${FORGEJO_ROOT_URL:-http://localhost:3001/}"
+      FORGEJO__server__HTTP_PORT: "3000"
+      FORGEJO__server__SSH_DOMAIN: "${FORGEJO_DOMAIN:-localhost}"
+      FORGEJO__server__SSH_PORT: "2222"
+      # Default to Forgejo's embedded SQLite for true zero-config. Point these at
+      # an external Postgres for production-grade durability if you prefer.
+      FORGEJO__database__DB_TYPE: "${FORGEJO_DB_TYPE:-sqlite3}"
+    volumes:
+      # All Forgejo state (repos, db when sqlite, config, avatars, LFS).
+      - forgejo-data:/data
+      # Keep container clock/zone aligned with the host (read-only).
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      # Host:Container — Forgejo's web UI. 3001 avoids ICE's web edge on 3000.
+      - "3001:3000"
+      # Forgejo SSH for git over ssh. 2222 avoids the host's own sshd on 22.
+      - "2222:2222"
+    healthcheck:
+      # Forgejo ships its own healthcheck endpoint.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - ice
+
+volumes:
+  # Durable Forgejo state. Independent of ICE's ice-data volume.
+  forgejo-data:
+    driver: local
